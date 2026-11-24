@@ -64,6 +64,11 @@ network.
 - **IAM role** — scoped to exactly one table, one queue, and one log group.
   No managed policies. The only wildcard is the ENI block, which AWS requires
   (see below).
+- **EventBridge rule** `transform-data-dev-schedule` — invokes the function
+  hourly via `rate(1 hour)`, with 2 retries and a 1 hour max event age.
+  Disable with `schedule_enabled = false`, or set
+  `schedule_expression = "cron(0 * * * ? *)"` to fire exactly on the hour in
+  UTC instead of an arbitrary offset from when you applied.
 - **CloudWatch log group** `/aws/lambda/transform-data-dev` — 365 day
   retention. CloudWatch accepts only a fixed set of retention values and 300
   is not among them, so 365 is used as the nearest value that does not discard
@@ -72,6 +77,64 @@ network.
 
 No database password and no secret anywhere: the function authenticates to
 DynamoDB and SQS with its execution role over TLS.
+
+## Cost
+
+**Roughly $14.62/month**, of which almost all is one line item.
+
+Figures are `us-east-2` list prices pulled from the AWS Pricing API on
+2026-11-24, and assume the hourly schedule (730 invocations/month) with the
+function's observed runtime of 219 ms at 256 MB on arm64.
+
+### Fixed — charged whether or not the function ever runs
+
+| Resource | Calculation | Monthly |
+| --- | --- | --- |
+| SQS interface endpoint | 2 ENIs (one per AZ) × 730 h × $0.01/h | **$14.60** |
+| ECR image storage | 0.203 GiB × $0.10/GB-mo | **$0.02** |
+| | | **$14.62** |
+
+### Variable — at 730 invocations/month
+
+| Resource | Rate | Monthly |
+| --- | --- | --- |
+| Lambda compute | $0.0000036667/GB-s + $0.0000276944/vCPU-s | ~$0.0008 |
+| Lambda requests | $0.20 per million | ~$0.0002 |
+| CloudWatch Logs | $0.50/GB ingest, $0.03/GB-mo store | ~$0.0007 |
+| DynamoDB on-demand | 1 RRU per scan, ~1 KB table | ~$0.0001 |
+| Endpoint data processing | $0.01/GB, 673-byte messages | <$0.0001 |
+| SQS messages | first 1M requests/month free | $0.00 |
+| | | **~$0.002** |
+
+### Free
+
+The VPC, both subnets, route tables, security groups, IAM role and policies,
+the Lambda ENIs, the EventBridge rule, and — importantly — the **DynamoDB
+gateway endpoint**. Gateway endpoints cost nothing, which is why only the SQS
+endpoint appears above.
+
+### Why one line item dominates
+
+99.8% of the bill is the SQS interface endpoint, and it exists solely because
+the function runs inside a VPC. AWS offers gateway endpoints only for S3 and
+DynamoDB, so a private path to SQS has a floor of $7.30/month per AZ.
+
+Levers, in order of saving:
+
+| Change | Monthly | Trade-off |
+| --- | --- | --- |
+| As built | $14.62 | — |
+| `az_count = 1` | $7.32 | No AZ redundancy; an AZ outage stops the function |
+| Remove the VPC | ~$0.02 | Traffic to DynamoDB and SQS goes over public AWS endpoints, still TLS and still IAM-authenticated |
+
+For comparison, the NAT gateway alternative considered during design would
+have been ~$33/month, so the endpoint approach is already the cheaper way to
+keep the function private.
+
+Caveats: list prices exclude tax and any private pricing. DynamoDB reports
+`TableSizeBytes: 0` because that metric refreshes only every few hours; the
+real figure is about 1 KB, which rounds to zero either way. An account still
+inside its AWS free tier will pay less than the above.
 
 ## Prerequisites
 
@@ -112,7 +175,8 @@ false` and pin `image_tag` to whatever the pipeline pushed.
 
 ## Run it
 
-The function has no event source — trigger it yourself:
+An EventBridge rule invokes the function every hour. You can also trigger it
+by hand at any time:
 
 ```bash
 terraform output -raw invoke_command   # prints the ready-made command
@@ -210,8 +274,15 @@ this goes anywhere near production.
 - **256 KB ceiling.** The whole document goes in the message body. The handler
   fails loudly if the payload would exceed the SQS limit; at that point switch
   to writing the file to S3 and sending a pointer.
-- **No trigger.** Add an EventBridge rule or a function URL in
-  [infra/lambda.tf](infra/lambda.tf) when you know how it should fire.
+- **Hourly schedule, nothing consuming the queue.** The function publishes a
+  message every hour and no consumer reads it, so the queue sits at roughly
+  96 messages in steady state (24/day against the 4 day retention) before
+  they age out. Harmless, but it is not a backlog you need to investigate.
+- **Scheduled failures are silent.** EventBridge invokes the function
+  asynchronously, so a failing run returns no error to anyone. Lambda retries
+  twice and then discards the event. There are no alarms yet, so the only
+  evidence would be a gap in the logs. A CloudWatch alarm on the function's
+  `Errors` metric is the obvious next step.
 - **Concurrency is unreserved.** Ideally it would be capped at 1, since each
   run republishes the entire table and parallel runs only produce duplicates.
   See the quota note below.
