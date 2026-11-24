@@ -64,7 +64,11 @@ network.
 - **IAM role** — scoped to exactly one table, one queue, and one log group.
   No managed policies. The only wildcard is the ENI block, which AWS requires
   (see below).
-- **CloudWatch log group** — 14 day retention.
+- **CloudWatch log group** `/aws/lambda/transform-data-dev` — 365 day
+  retention. CloudWatch accepts only a fixed set of retention values and 300
+  is not among them, so 365 is used as the nearest value that does not discard
+  logs earlier than intended. `log_retention_days` validates against the
+  allowed set, so a bad value fails at plan time.
 
 No database password and no secret anywhere: the function authenticates to
 DynamoDB and SQS with its execution role over TLS.
