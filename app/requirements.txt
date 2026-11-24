@@ -1,0 +1,4 @@
+# The Lambda base image already ships boto3, but pinning it keeps builds
+# reproducible instead of drifting with the base image tag.
+boto3==1.35.49
+botocore==1.35.49

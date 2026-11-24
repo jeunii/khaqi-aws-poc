@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and adjust.
+
+aws_region   = "us-east-2"
+project_name = "transform-data"
+environment  = "dev"
+
+additional_tags = {
+  Owner = "platform-team"
+}
+
+lambda_memory_mb       = 256
+lambda_timeout_seconds = 30
+lambda_architecture    = "arm64"
+log_level              = "INFO"
+
+# Set to false if your CI pipeline builds and pushes the image instead,
+# and pin the tag it produced.
+build_and_push_image = true
+# image_tag          = "v1.0.0"
