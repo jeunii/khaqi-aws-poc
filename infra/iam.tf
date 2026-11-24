@@ -59,6 +59,39 @@ data "aws_iam_policy_document" "lambda" {
     ]
   }
 
+  # Required for Lambda to attach the function to the VPC. The service creates
+  # and tears down elastic network interfaces in our private subnets using
+  # this role.
+  statement {
+    sid    = "DescribeNetworkResources"
+    effect = "Allow"
+    actions = [
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeVpcs",
+    ]
+    # These EC2 Describe calls do not support resource-level permissions, so
+    # "*" is the only valid value. They are read-only and list metadata.
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "ManageOwnVpcInterfaces"
+    effect = "Allow"
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DeleteNetworkInterface",
+      "ec2:AssignPrivateIpAddresses",
+      "ec2:UnassignPrivateIpAddresses",
+    ]
+    resources = concat(
+      ["arn:${local.partition}:ec2:${var.aws_region}:${local.account_id}:network-interface/*"],
+      aws_subnet.private[*].arn,
+      [aws_security_group.lambda.arn],
+    )
+  }
+
   statement {
     sid    = "PublishToOutputQueue"
     effect = "Allow"

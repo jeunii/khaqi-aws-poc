@@ -52,6 +52,13 @@ resource "aws_lambda_function" "this" {
   # concurrent runs would just publish duplicate documents.
   reserved_concurrent_executions = 1
 
+  # Private subnets with no route to the internet. DynamoDB and SQS are
+  # reached over VPC endpoints; see vpc.tf.
+  vpc_config {
+    subnet_ids         = aws_subnet.private[*].id
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+
   environment {
     variables = {
       TABLE_NAME = aws_dynamodb_table.records.name

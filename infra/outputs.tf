@@ -13,6 +13,29 @@ output "lambda_role_arn" {
   value       = aws_iam_role.lambda.arn
 }
 
+output "vpc_id" {
+  description = "ID of the VPC the function runs in."
+  value       = aws_vpc.this.id
+}
+
+output "private_subnet_ids" {
+  description = "Private subnets the function's ENIs live in."
+  value       = aws_subnet.private[*].id
+}
+
+output "lambda_security_group_id" {
+  description = "Security group attached to the function."
+  value       = aws_security_group.lambda.id
+}
+
+output "vpc_endpoint_ids" {
+  description = "VPC endpoints the function uses to reach AWS services."
+  value = {
+    dynamodb = aws_vpc_endpoint.dynamodb.id
+    sqs      = aws_vpc_endpoint.sqs.id
+  }
+}
+
 output "dynamodb_table_name" {
   description = "Name of the source DynamoDB table."
   value       = aws_dynamodb_table.records.name

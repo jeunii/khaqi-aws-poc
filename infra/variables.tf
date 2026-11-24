@@ -33,6 +33,35 @@ variable "additional_tags" {
 }
 
 # --------------------------------------------------------------------------- #
+# Networking
+# --------------------------------------------------------------------------- #
+
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC."
+  type        = string
+  default     = "10.0.0.0/16"
+
+  validation {
+    condition     = can(cidrsubnet(var.vpc_cidr, 8, 0))
+    error_message = "vpc_cidr must be a valid IPv4 CIDR block no smaller than /24."
+  }
+}
+
+variable "az_count" {
+  description = <<-EOT
+    Number of availability zones to spread the private subnets across.
+    Each AZ adds one SQS interface endpoint ENI, billed hourly.
+  EOT
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.az_count >= 1 && var.az_count <= 3
+    error_message = "az_count must be between 1 and 3."
+  }
+}
+
+# --------------------------------------------------------------------------- #
 # Lambda
 # --------------------------------------------------------------------------- #
 
