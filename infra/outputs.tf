@@ -36,6 +36,16 @@ output "vpc_endpoint_ids" {
   }
 }
 
+output "schedule_rule_name" {
+  description = "EventBridge rule invoking the function, or null if disabled."
+  value       = try(aws_cloudwatch_event_rule.schedule[0].name, null)
+}
+
+output "schedule_expression" {
+  description = "Active schedule expression, or null if disabled."
+  value       = try(aws_cloudwatch_event_rule.schedule[0].schedule_expression, null)
+}
+
 output "dynamodb_table_name" {
   description = "Name of the source DynamoDB table."
   value       = aws_dynamodb_table.records.name

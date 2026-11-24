@@ -133,6 +133,32 @@ variable "log_level" {
 }
 
 # --------------------------------------------------------------------------- #
+# Schedule
+# --------------------------------------------------------------------------- #
+
+variable "schedule_enabled" {
+  description = "Create an EventBridge rule that invokes the function on a schedule."
+  type        = bool
+  default     = true
+}
+
+variable "schedule_expression" {
+  description = <<-EOT
+    EventBridge schedule expression.
+    "rate(1 hour)" fires one hour after the rule is created and hourly after
+    that, so the offset depends on when you applied. Use
+    "cron(0 * * * ? *)" instead to fire exactly on the hour, in UTC.
+  EOT
+  type        = string
+  default     = "rate(1 hour)"
+
+  validation {
+    condition     = can(regex("^(rate|cron)\\(.+\\)$", var.schedule_expression))
+    error_message = "schedule_expression must be a rate(...) or cron(...) expression."
+  }
+}
+
+# --------------------------------------------------------------------------- #
 # Container image
 # --------------------------------------------------------------------------- #
 
