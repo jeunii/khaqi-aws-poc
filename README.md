@@ -3,17 +3,32 @@
 A Lambda function that reads records from DynamoDB, transforms them into a
 single JSON document, and ships that document to SQS.
 
+The function runs in private subnets with no route to the internet. It reaches
+DynamoDB and SQS over VPC endpoints, so that traffic never leaves the AWS
+network.
+
 ```
-┌──────────────┐      Scan       ┌────────────────────┐      SendMessage      ┌──────────────┐
-│  DynamoDB    │ ◀────────────── │  Lambda            │ ────────────────────▶ │  SQS         │
-│  5 records   │                 │  (container image) │                       │  + DLQ       │
-│  name/sex/   │                 │  transform-data    │                       │              │
-│  address     │                 └────────────────────┘                       └──────────────┘
-└──────────────┘                        ▲
-                                        │ image pull
-                                   ┌────┴─────┐
-                                   │   ECR    │
-                                   └──────────┘
+          VPC 10.0.0.0/16  (no internet gateway, no NAT)
+ ┌──────────────────────────────────────────────────────────┐
+ │                                                          │
+ │   private-a 10.0.1.0/24        private-b 10.0.2.0/24     │
+ │   ┌────────────────────────────────────────────────┐     │
+ │   │              Lambda  transform-data            │     │
+ │   │              (container image, arm64)          │     │
+ │   └────────┬──────────────────────────────┬────────┘     │
+ │            │ Scan                         │ SendMessage  │
+ │   ┌────────▼─────────┐          ┌─────────▼────────┐     │
+ │   │  Gateway endpoint│          │Interface endpoint│     │
+ │   │  (route table)   │          │ (ENI per subnet) │     │
+ │   └────────┬─────────┘          └─────────┬────────┘     │
+ └────────────┼──────────────────────────────┼──────────────┘
+              │                              │
+       ┌──────▼───────┐               ┌──────▼───────┐
+       │  DynamoDB    │               │  SQS         │
+       │  5 records   │               │  + DLQ       │
+       └──────────────┘               └──────────────┘
+
+       ECR ──image pull──▶ Lambda service (outside the VPC)
 ```
 
 ## Layout
@@ -35,13 +50,24 @@ single JSON document, and ships that document to SQS.
 - **ECR repository** `transform-data-dev` — immutable tags, scan on push,
   keeps the last 10 images.
 - **Lambda function** `transform-data-dev` — arm64 container image, 256 MB,
-  30 s timeout, concurrency capped at 1.
+  30 s timeout, attached to the VPC's private subnets.
+- **VPC** `10.0.0.0/16` — two private subnets across two AZs, one route table,
+  no internet gateway and no NAT gateway. The default security group is
+  adopted and stripped of every rule.
+- **VPC endpoints** — a free gateway endpoint for DynamoDB and an interface
+  endpoint for SQS (one ENI per subnet, billed hourly). Both carry a policy
+  restricting them to this function and this table/queue, which blocks
+  exfiltration to resources in other accounts.
+- **Security groups** — the function has no inbound rules and exactly two
+  egress rules: 443 to the interface endpoint, and 443 to DynamoDB's managed
+  prefix list.
 - **IAM role** — scoped to exactly one table, one queue, and one log group.
-  No managed policies, no wildcard resources.
+  No managed policies. The only wildcard is the ENI block, which AWS requires
+  (see below).
 - **CloudWatch log group** — 14 day retention.
 
-No VPC, no database password, no secret anywhere: the function authenticates
-to DynamoDB and SQS with its execution role over TLS.
+No database password and no secret anywhere: the function authenticates to
+DynamoDB and SQS with its execution role over TLS.
 
 ## Prerequisites
 
@@ -182,5 +208,45 @@ this goes anywhere near production.
   to writing the file to S3 and sending a pointer.
 - **No trigger.** Add an EventBridge rule or a function URL in
   [infra/lambda.tf](infra/lambda.tf) when you know how it should fire.
-- **Concurrency is capped at 1** because each run republishes the entire
-  table; parallel runs would only produce duplicates.
+- **Concurrency is unreserved.** Ideally it would be capped at 1, since each
+  run republishes the entire table and parallel runs only produce duplicates.
+  See the quota note below.
+- **No internet access.** The function can reach DynamoDB and SQS and nothing
+  else. If it ever needs a third-party API, you must add a NAT gateway
+  (~$33/mo) or another interface endpoint.
+- **Base image CVEs.** `scan_on_push` reports HIGH findings in the Amazon
+  Linux 2023 packages `rpm` and `rpm-libs`, inherited from
+  `public.ecr.aws/lambda/python:3.13`. Nothing in the handler invokes them.
+  Add `RUN dnf -y update && dnf clean all` to the Dockerfile to clear them.
+
+## Gotchas worth knowing
+
+Three things in here were found the hard way, and all three are load-bearing.
+
+**VPC endpoint policies take minutes to propagate.** After changing the policy
+on the DynamoDB gateway endpoint, calls kept failing with
+`AccessDeniedException ... because no VPC endpoint policy allows the
+dynamodb:Scan action` for roughly five minutes — including when the policy was
+temporarily set to allow everything. If you change an endpoint policy, wait it
+out before concluding the policy is wrong.
+
+**Endpoint policies match the session ARN, not the role ARN.** The policies in
+[infra/vpc.tf](infra/vpc.tf) use `"Principal": "*"` narrowed by an
+`aws:PrincipalArn` condition. The caller arrives as
+`arn:aws:sts::<acct>:assumed-role/transform-data-dev-lambda/transform-data-dev`.
+Unlike most resource-based policies, endpoint policies do not expand a role ARN
+to its sessions, so `"Principal": {"AWS": "<role arn>"}` is the riskier form.
+
+**The ENI permissions must be `Resource: "*"`.** Scoping
+`ec2:CreateNetworkInterface` / `DeleteNetworkInterface` to specific subnet,
+security group, or ENI ARNs makes `CreateFunction` fail outright with
+`InvalidParameterValueException: The provided execution role does not have
+permissions to call DeleteNetworkInterface on EC2`. The ENIs do not exist when
+the permission check runs. This mirrors the AWS-managed
+`AWSLambdaVPCAccessExecutionRole`.
+
+**Reserving concurrency needs account headroom.** `reserved_concurrency` is
+`-1` because AWS requires at least 10 *unreserved* concurrent executions at all
+times, and this account's total limit is 10 — so no reservation of any size is
+possible. Raise the Lambda concurrency quota, then set
+`reserved_concurrency = 1`.

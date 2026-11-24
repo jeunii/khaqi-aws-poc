@@ -153,14 +153,20 @@ resource "aws_vpc_endpoint" "dynamodb" {
   route_table_ids   = [aws_route_table.private.id]
 
   # Anti-exfiltration: this endpoint can only reach our own table, so a
-  # compromised function cannot push data into a table in another account.
+  # compromised function cannot read a table in another account through it.
+  #
+  # The principal is "*" narrowed by aws:PrincipalArn rather than the role ARN
+  # directly. VPC endpoint policies match the caller's *session* ARN
+  # (assumed-role/transform-data-dev-lambda/transform-data-dev) and do not
+  # expand a role ARN to its sessions, so "Principal": {"AWS": <role arn>}
+  # silently matches nothing and every call is denied.
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Sid       = "OnlyThisFunctionOnlyThisTable"
         Effect    = "Allow"
-        Principal = { AWS = aws_iam_role.lambda.arn }
+        Principal = "*"
         Action = [
           "dynamodb:Scan",
           "dynamodb:Query",
@@ -172,6 +178,9 @@ resource "aws_vpc_endpoint" "dynamodb" {
           aws_dynamodb_table.records.arn,
           "${aws_dynamodb_table.records.arn}/index/*",
         ]
+        Condition = {
+          StringEquals = { "aws:PrincipalArn" = aws_iam_role.lambda.arn }
+        }
       },
     ]
   })
@@ -190,20 +199,24 @@ resource "aws_vpc_endpoint" "sqs" {
   security_group_ids  = [aws_security_group.endpoints.id]
   private_dns_enabled = true
 
-  # Same anti-exfiltration reasoning: only our queue, only our role.
+  # Same anti-exfiltration reasoning, and the same aws:PrincipalArn pattern as
+  # the DynamoDB endpoint above.
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Sid       = "OnlyThisFunctionOnlyThisQueue"
         Effect    = "Allow"
-        Principal = { AWS = aws_iam_role.lambda.arn }
+        Principal = "*"
         Action = [
           "sqs:SendMessage",
           "sqs:GetQueueAttributes",
           "sqs:GetQueueUrl",
         ]
         Resource = aws_sqs_queue.output.arn
+        Condition = {
+          StringEquals = { "aws:PrincipalArn" = aws_iam_role.lambda.arn }
+        }
       },
     ]
   })

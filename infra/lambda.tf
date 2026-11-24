@@ -48,9 +48,12 @@ resource "aws_lambda_function" "this" {
   memory_size = var.lambda_memory_mb
   timeout     = var.lambda_timeout_seconds
 
-  # One in-flight invocation at a time: the whole table is read every run, so
-  # concurrent runs would just publish duplicate documents.
-  reserved_concurrent_executions = 1
+  # Ideally 1: the whole table is read every run, so concurrent runs only
+  # publish duplicate documents. Reserving any concurrency requires the
+  # account to keep at least 10 unreserved, so on an account whose total limit
+  # is 10 this must stay -1 (unreserved). Raise the Lambda concurrency quota,
+  # then set reserved_concurrency = 1.
+  reserved_concurrent_executions = var.reserved_concurrency
 
   # Private subnets with no route to the internet. DynamoDB and SQS are
   # reached over VPC endpoints; see vpc.tf.

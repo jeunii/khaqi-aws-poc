@@ -59,37 +59,27 @@ data "aws_iam_policy_document" "lambda" {
     ]
   }
 
-  # Required for Lambda to attach the function to the VPC. The service creates
+  # Required for Lambda to attach the function to the VPC: the service creates
   # and tears down elastic network interfaces in our private subnets using
   # this role.
+  #
+  # These must be scoped to "*". CreateFunction rejects the role outright
+  # ("does not have permissions to call DeleteNetworkInterface on EC2") if the
+  # actions are restricted to specific subnet, security group, or ENI ARNs,
+  # because the ENIs do not exist when the permission check runs. This matches
+  # the AWS-managed AWSLambdaVPCAccessExecutionRole policy, which we inline
+  # here rather than attach so the whole role stays readable in one place.
   statement {
-    sid    = "DescribeNetworkResources"
-    effect = "Allow"
-    actions = [
-      "ec2:DescribeNetworkInterfaces",
-      "ec2:DescribeSubnets",
-      "ec2:DescribeSecurityGroups",
-      "ec2:DescribeVpcs",
-    ]
-    # These EC2 Describe calls do not support resource-level permissions, so
-    # "*" is the only valid value. They are read-only and list metadata.
-    resources = ["*"]
-  }
-
-  statement {
-    sid    = "ManageOwnVpcInterfaces"
+    sid    = "ManageVpcNetworkInterfaces"
     effect = "Allow"
     actions = [
       "ec2:CreateNetworkInterface",
       "ec2:DeleteNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
       "ec2:AssignPrivateIpAddresses",
       "ec2:UnassignPrivateIpAddresses",
     ]
-    resources = concat(
-      ["arn:${local.partition}:ec2:${var.aws_region}:${local.account_id}:network-interface/*"],
-      aws_subnet.private[*].arn,
-      [aws_security_group.lambda.arn],
-    )
+    resources = ["*"]
   }
 
   statement {

@@ -88,10 +88,42 @@ variable "lambda_architecture" {
   }
 }
 
-variable "log_retention_days" {
-  description = "CloudWatch Logs retention for the function."
+variable "reserved_concurrency" {
+  description = <<-EOT
+    Reserved concurrent executions for the function. Use -1 for unreserved.
+    Setting a positive value requires the account to retain at least 10
+    unreserved executions, so it fails on accounts at the default limit of 10.
+  EOT
   type        = number
-  default     = 14
+  default     = -1
+
+  validation {
+    condition     = var.reserved_concurrency == -1 || var.reserved_concurrency >= 1
+    error_message = "reserved_concurrency must be -1 (unreserved) or a positive integer."
+  }
+}
+
+variable "log_retention_days" {
+  description = <<-EOT
+    CloudWatch Logs retention for the function, in days.
+    CloudWatch only accepts a fixed set of values; 0 means never expire.
+    Note there is no 300: the nearest valid values are 180 and 365.
+  EOT
+  type        = number
+  default     = 365
+
+  validation {
+    condition = contains(
+      [0, 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731,
+      1096, 1827, 2192, 2557, 2922, 3288, 3653],
+      var.log_retention_days,
+    )
+    error_message = <<-EOT
+      log_retention_days must be one of the values CloudWatch Logs accepts:
+      0 (never expire), 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400,
+      545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653.
+    EOT
+  }
 }
 
 variable "log_level" {
